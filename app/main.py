@@ -301,23 +301,34 @@ async def add_to_queue(
     db.commit()
     db.refresh(queue_item)
 
+    # Build the complete updated queue for connected clients.
+    updated_queue = db.query(QueueItem).filter(
+        QueueItem.lounge_id == lounge_id
+    ).order_by(
+        QueueItem.position.asc()
+    ).all()
+
     await queue_manager.broadcast(
-    lounge_id,
-    {
-        "event": "track_added",
-        "queue_item_id": queue_item.id,
-        "lounge_id": lounge_id,
-        "track_id": track.id,
-        "track_title": track.title,
-        "artist": track.artist,
-        "added_by": user.id,
-        "position": queue_item.position
-    }
-)
+        lounge_id,
+        {
+            "event": "lounge.queue.update",
+            "payload": {
+                "queue": [
+                    {
+                        "queue_item_id": item.id,
+                        "track_id": item.track_id,
+                        "track_title": item.track.title,
+                        "artist": item.track.artist,
+                        "added_by": item.added_by,
+                        "position": item.position
+                    }
+                    for item in updated_queue
+                ],
+                "reason": "add"
+            }
+        }
+    )
     
-
-
-
     return {
         "message": "Track added to queue successfully",
         "queue_item_id": queue_item.id,

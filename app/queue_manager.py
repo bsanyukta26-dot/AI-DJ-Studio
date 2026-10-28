@@ -1,4 +1,4 @@
-
+import time
 from typing import Dict, List
 from fastapi import WebSocket
 
@@ -26,9 +26,28 @@ class QueueConnectionManager:
     async def broadcast(self, lounge_id: int, message: dict):
         connections = self.active_connections.get(lounge_id, [])
 
+        # Convert the existing message into the PRD event envelope.
+        event_name = message.get("event", "lounge.queue.update")
+
+        if "payload" in message:
+            payload = message["payload"]
+        else:
+            payload = {
+                key: value
+                for key, value in message.items()
+                if key not in ("event", "loungeId", "ts")
+            }
+
+        event_message = {
+            "event": event_name,
+            "loungeId": lounge_id,
+            "payload": payload,
+            "ts": int(time.time() * 1000)
+        }
+
         for websocket in connections[:]:
             try:
-                await websocket.send_json(message)
+                await websocket.send_json(event_message)
             except Exception:
                 self.disconnect(lounge_id, websocket)
 
