@@ -1,3 +1,4 @@
+import json
 from fastapi import (
     FastAPI,
     Depends,
@@ -595,7 +596,6 @@ def login_user(
     }
 
 
-
 @app.websocket("/ws/lounges/{lounge_id}")
 async def lounge_queue_websocket(
     websocket: WebSocket,
@@ -605,8 +605,63 @@ async def lounge_queue_websocket(
 
     try:
         while True:
-            # Keep the connection alive and receive client messages.
-            await websocket.receive_text()
+            raw_message = await websocket.receive_text()
+
+            try:
+                message = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "event": "lounge.chat.error",
+                    "loungeId": lounge_id,
+                    "payload": {
+                        "message": "Invalid JSON message"
+                    }
+                })
+                continue
+
+            if not isinstance(message, dict):
+                await websocket.send_json({
+                    "event": "lounge.chat.error",
+                    "loungeId": lounge_id,
+                    "payload": {
+                        "message": "Message must be a JSON object"
+                    }
+                })
+                continue
+
+            if message.get("event") != "lounge.chat.message":
+                continue
+
+            payload = message.get("payload", {})
+
+            if not isinstance(payload, dict):
+                continue
+
+            username = payload.get("username")
+            text = payload.get("message")
+
+            if not isinstance(username, str) or not isinstance(text, str):
+                continue
+
+            username = username.strip()
+            text = text.strip()
+
+            if not username or not text:
+                continue
+
+            if len(username) > 50 or len(text) > 1000:
+                continue
+
+            await queue_manager.broadcast(
+                lounge_id,
+                {
+                    "event": "lounge.chat.message",
+                    "payload": {
+                        "username": username,
+                        "message": text
+                    }
+                }
+            )
 
     except WebSocketDisconnect:
         queue_manager.disconnect(lounge_id, websocket)
