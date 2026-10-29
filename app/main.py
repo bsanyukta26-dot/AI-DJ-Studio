@@ -33,7 +33,8 @@ from app.schemas import (
 from app.security import (
     hash_password,
     verify_password,
-    create_access_token
+    create_access_token,
+    verify_access_token
 )
 
 Base.metadata.create_all(bind=engine)
@@ -595,12 +596,61 @@ def login_user(
         "token_type": "bearer"
     }
 
-
 @app.websocket("/ws/lounges/{lounge_id}")
 async def lounge_queue_websocket(
     websocket: WebSocket,
     lounge_id: int
 ):
+    token = websocket.query_params.get("token")
+
+    if not token:
+        await websocket.close(code=1008, reason="Missing token")
+        return
+
+    token_payload = verify_access_token(token)
+
+    if not token_payload:
+        await websocket.close(code=1008, reason="Invalid token")
+        return
+
+    user_id = token_payload.get("sub")
+
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        await websocket.close(code=1008, reason="Invalid user identity")
+        return
+
+    db = SessionLocal()
+
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            await websocket.close(code=1008, reason="User not found")
+            return
+
+        membership = (
+            db.query(LoungeMember)
+            .filter(
+                LoungeMember.lounge_id == lounge_id,
+                LoungeMember.user_id == user_id
+            )
+            .first()
+        )
+
+        if not membership:
+            await websocket.close(
+                code=1008,
+                reason="Lounge membership required"
+            )
+            return
+
+        username = user.username
+
+    finally:
+        db.close()
+
     await queue_manager.connect(lounge_id, websocket)
 
     try:
@@ -613,9 +663,7 @@ async def lounge_queue_websocket(
                 await websocket.send_json({
                     "event": "lounge.chat.error",
                     "loungeId": lounge_id,
-                    "payload": {
-                        "message": "Invalid JSON message"
-                    }
+                    "payload": {"message": "Invalid JSON message"}
                 })
                 continue
 
@@ -637,19 +685,14 @@ async def lounge_queue_websocket(
             if not isinstance(payload, dict):
                 continue
 
-            username = payload.get("username")
             text = payload.get("message")
 
-            if not isinstance(username, str) or not isinstance(text, str):
+            if not isinstance(text, str):
                 continue
 
-            username = username.strip()
             text = text.strip()
 
-            if not username or not text:
-                continue
-
-            if len(username) > 50 or len(text) > 1000:
+            if not text or len(text) > 1000:
                 continue
 
             await queue_manager.broadcast(
