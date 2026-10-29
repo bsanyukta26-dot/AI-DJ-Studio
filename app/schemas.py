@@ -54,3 +54,8 @@ class QueueAdd(BaseModel):
     lounge_id: int = Field(..., gt=0)
     track_id: int = Field(..., gt=0)
     user_id: int = Field(..., gt=0)
+
+
+class QueueVoteCreate(BaseModel):
+    user_id: int = Field(..., gt=0)
+    vote: int = Field(1, ge=-1, le=1)

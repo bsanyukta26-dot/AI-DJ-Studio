@@ -7,7 +7,7 @@ from fastapi import (
 )
 
 from sqlalchemy.orm import Session
-
+from sqlalchemy import func
 
 from app.database import Base, engine, SessionLocal
 from app.model.user import User
@@ -15,6 +15,7 @@ from app.model.track import Track
 from app.model.lounge import Lounge
 from app.model.lounge_member import LoungeMember
 from app.model.queue_item import QueueItem
+from app.model.queue_vote import QueueVote
 from app.queue_manager import queue_manager
 
 from app.schemas import (
@@ -26,6 +27,7 @@ from app.schemas import (
     MetadataTimelineItem,
     LoungeJoin,
     QueueAdd,
+    QueueVoteCreate,
 )
 from app.security import (
     hash_password,
@@ -375,6 +377,148 @@ def get_lounge_queue(
             }
             for item in queue_items
         ]
+    }
+
+
+@app.post("/lounges/{lounge_id}/queue/{queue_item_id}/vote")
+async def vote_for_queue_item(
+    lounge_id: int,
+    queue_item_id: int,
+    vote_data: QueueVoteCreate,
+    db: Session = Depends(get_db)
+):
+    # Check that the lounge exists.
+    lounge = db.query(Lounge).filter(
+        Lounge.id == lounge_id
+    ).first()
+
+    if not lounge:
+        raise HTTPException(
+            status_code=404,
+            detail="Lounge not found"
+        )
+
+    # Check that the queue item belongs to this lounge.
+    queue_item = db.query(QueueItem).filter(
+        QueueItem.id == queue_item_id,
+        QueueItem.lounge_id == lounge_id
+    ).first()
+
+    if not queue_item:
+        raise HTTPException(
+            status_code=404,
+            detail="Queue item not found in this lounge"
+        )
+
+    # Only lounge members can vote.
+    membership = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == lounge_id,
+        LoungeMember.user_id == vote_data.user_id
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=403,
+            detail="Join this lounge before voting"
+        )
+
+    # Find this user's existing vote.
+    existing_vote = db.query(QueueVote).filter(
+        QueueVote.queue_item_id == queue_item_id,
+        QueueVote.user_id == vote_data.user_id
+    ).first()
+
+    if vote_data.vote == 0:
+        if existing_vote:
+            db.delete(existing_vote)
+
+    elif existing_vote:
+        existing_vote.vote = vote_data.vote
+
+    else:
+        new_vote = QueueVote(
+            queue_item_id=queue_item_id,
+            user_id=vote_data.user_id,
+            vote=vote_data.vote
+        )
+        db.add(new_vote)
+
+    db.commit()
+
+       # Calculate the net vote score for this queue item.
+    vote_score = db.query(
+        func.coalesce(func.sum(QueueVote.vote), 0)
+    ).filter(
+        QueueVote.queue_item_id == queue_item_id
+    ).scalar()
+
+    # Get all queue items in their current order.
+    queue_items = db.query(QueueItem).filter(
+        QueueItem.lounge_id == lounge_id
+    ).order_by(
+        QueueItem.position.asc()
+    ).all()
+
+    # Calculate each item's net vote score.
+    scored_items = []
+    for item in queue_items:
+        score = db.query(
+            func.coalesce(func.sum(QueueVote.vote), 0)
+        ).filter(
+            QueueVote.queue_item_id == item.id
+        ).scalar()
+
+        scored_items.append((item, score))
+
+    # Higher scores come first; ties preserve the existing order.
+    scored_items.sort(key=lambda pair: pair[1], reverse=True)
+
+    # Move positions temporarily out of the final range.
+    for position, (item, score) in enumerate(scored_items, start=1):
+        item.position = position + len(scored_items)
+
+    db.flush()
+
+    # Assign the final positions in vote-score order.
+    for position, (item, score) in enumerate(scored_items, start=1):
+        item.position = position
+
+    db.commit()
+
+
+    # Broadcast the reordered queue to connected WebSocket clients.
+    updated_queue = db.query(QueueItem).filter(
+        QueueItem.lounge_id == lounge_id
+    ).order_by(
+        QueueItem.position.asc()
+    ).all()
+
+    await queue_manager.broadcast(
+        lounge_id,
+        {
+            "event": "lounge.queue.update",
+            "payload": {
+                "queue": [
+                    {
+                        "queue_item_id": item.id,
+                        "track_id": item.track_id,
+                        "track_title": item.track.title,
+                        "artist": item.track.artist,
+                        "added_by": item.added_by,
+                        "position": item.position
+                    }
+                    for item in updated_queue
+                ],
+                "reason": "vote"
+            }
+        }
+    )
+
+    return {
+        "message": "Vote updated successfully",
+        "lounge_id": lounge_id,
+        "queue_item_id": queue_item_id,
+        "vote_score": vote_score
     }
 
 
