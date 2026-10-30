@@ -27,6 +27,7 @@ from app.queue_manager import queue_manager
 from app.schemas import (
     UserRegister,
     UserLogin,
+    UserRoleUpdate,
     LoungeCreate,
     TrackAcousticProfile,
     AcousticFeatures,
@@ -35,6 +36,7 @@ from app.schemas import (
     QueueAdd,
     QueueVoteCreate,
 )
+
 from app.security import (
     hash_password,
     verify_password,
@@ -127,6 +129,19 @@ def get_current_user(
         )
 
     return user
+def require_roles(*allowed_roles):
+    def role_checker(
+        current_user: User = Depends(get_current_user)
+    ):
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to perform this action"
+            )
+
+        return current_user
+
+    return role_checker
 
 @app.get("/")
 def home():
@@ -177,21 +192,14 @@ def get_track_acoustic_profile(trackId: int, db: Session = Depends(get_db)):
 @app.post("/lounges")
 def create_lounge(
     lounge_data: LoungeCreate,
+    current_user: User = Depends(
+        require_roles("Host", "Admin")
+    ),
     db: Session = Depends(get_db)
 ):
-    owner = db.query(User).filter(
-        User.id == lounge_data.owner_id
-    ).first()
-
-    if not owner:
-        raise HTTPException(
-            status_code=404,
-            detail="Owner user not found"
-        )
-
     new_lounge = Lounge(
         name=lounge_data.name,
-        owner_id=lounge_data.owner_id,
+        owner_id=current_user.id,
         invite_code=secrets.token_hex(4).upper(),
         vibe=lounge_data.vibe,
         target_bpm=lounge_data.target_bpm,
@@ -216,17 +224,10 @@ def create_lounge(
 @app.post("/lounges/join")
 def join_lounge(
     join_data: LoungeJoin,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(
-        User.id == join_data.user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User not found"
-        )
+    user = current_user
 
     lounge = db.query(Lounge).filter(
         Lounge.invite_code == join_data.invite_code.strip().upper()
@@ -562,16 +563,6 @@ def register_user(
     user_data: UserRegister,
     db: Session = Depends(get_db)
 ):
-    allowed_roles = [
-        "Listener",
-        "DJ",
-        "Lounge Owner",
-        "Admin"
-    ]
-
-    if user_data.role not in allowed_roles:
-        raise HTTPException(status_code=400, detail="Invalid role")
-
     existing_user = db.query(User).filter(
         (User.username == user_data.username)
         | (User.email == user_data.email)
@@ -587,9 +578,8 @@ def register_user(
         username=user_data.username,
         email=user_data.email,
         password_hash=hash_password(user_data.password),
-        role=user_data.role
+        role="Listener"
     )
-
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -627,6 +617,56 @@ def login_user(
     return {
         "access_token": access_token,
         "token_type": "bearer"
+    }
+
+@app.put("/users/{user_id}/role")
+def update_user_role(
+    user_id: int,
+    role_data: UserRoleUpdate,
+    current_user: User = Depends(
+        require_roles("Admin")
+    ),
+    db: Session = Depends(get_db)
+):
+    allowed_roles = [
+        "Listener",
+        "Co-DJ",
+        "Host",
+        "Admin"
+    ]
+
+    if role_data.role not in allowed_roles:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role"
+        )
+
+    target_user = db.query(User).filter(
+        User.id == user_id
+    ).first()
+
+    if not target_user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    if target_user.id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot change your own role"
+        )
+
+    target_user.role = role_data.role
+
+    db.commit()
+    db.refresh(target_user)
+
+    return {
+        "message": "User role updated successfully",
+        "user_id": target_user.id,
+        "username": target_user.username,
+        "role": target_user.role
     }
 
 @app.websocket("/ws/lounges/{lounge_id}")
