@@ -5,9 +5,14 @@ from fastapi import (
     HTTPException,
     WebSocket,
     WebSocketDisconnect,
+    Header,
+    Security,
 )
 
 from sqlalchemy.orm import Session
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+bearer_scheme = HTTPBearer()
 from sqlalchemy import func
 
 from app.database import Base, engine, SessionLocal
@@ -40,7 +45,6 @@ from app.security import (
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI DJ Studio")
-
 
 def seed_tracks():
     db = SessionLocal()
@@ -82,8 +86,6 @@ def seed_tracks():
 
 seed_tracks()
 
-
-
 def get_db():
     db = SessionLocal()
     try:
@@ -91,6 +93,40 @@ def get_db():
     finally:
         db.close()
 
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+
+    token_payload = verify_access_token(token)
+
+    if not token_payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
+    user_id = token_payload.get("sub")
+
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid user identity"
+        )
+
+    user = db.query(User).filter(
+        User.id == user_id
+    ).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+
+    return user
 
 @app.get("/")
 def home():
@@ -116,7 +152,6 @@ def get_tracks(db: Session = Depends(get_db)):
 
 import secrets
 
-
 @app.get("/api/v1/tracks/{trackId}/acoustic-profile", response_model=TrackAcousticProfile)
 def get_track_acoustic_profile(trackId: int, db: Session = Depends(get_db)):
     from fastapi import HTTPException
@@ -138,8 +173,6 @@ def get_track_acoustic_profile(trackId: int, db: Session = Depends(get_db)):
         },
         "timeline": [],
     }
-
-
 
 @app.post("/lounges")
 def create_lounge(
@@ -179,7 +212,6 @@ def create_lounge(
         "target_bpm": new_lounge.target_bpm,
         "bpm_tolerance": new_lounge.bpm_tolerance
     }
-
 
 @app.post("/lounges/join")
 def join_lounge(
@@ -233,12 +265,12 @@ def join_lounge(
         "user_id": user.id
     }
 
-
 @app.post("/lounges/{lounge_id}/queue")
 async def add_to_queue(
     lounge_id: int,
     queue_data: QueueAdd,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     # Check that the lounge exists
     lounge = db.query(Lounge).filter(
@@ -251,21 +283,11 @@ async def add_to_queue(
             detail="Lounge not found"
         )
 
-    # Check that the user exists
-    user = db.query(User).filter(
-        User.id == queue_data.user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User not found"
-        )
-
+    user = current_user
     # Check that the user has joined this lounge
     membership = db.query(LoungeMember).filter(
         LoungeMember.lounge_id == lounge_id,
-        LoungeMember.user_id == queue_data.user_id
+        LoungeMember.user_id == current_user.id
     ).first()
 
     if not membership:
@@ -346,7 +368,8 @@ async def add_to_queue(
 @app.get("/lounges/{lounge_id}/queue")
 def get_lounge_queue(
     lounge_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     lounge = db.query(Lounge).filter(
         Lounge.id == lounge_id
@@ -357,6 +380,16 @@ def get_lounge_queue(
             status_code=404,
             detail="Lounge not found"
         )
+    membership = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == lounge_id,
+        LoungeMember.user_id == current_user.id
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+        status_code=403,
+        detail="Join this lounge before viewing its queue"
+    )
 
     queue_items = db.query(QueueItem).filter(
         QueueItem.lounge_id == lounge_id
@@ -387,7 +420,8 @@ async def vote_for_queue_item(
     lounge_id: int,
     queue_item_id: int,
     vote_data: QueueVoteCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     # Check that the lounge exists.
     lounge = db.query(Lounge).filter(
@@ -415,7 +449,7 @@ async def vote_for_queue_item(
     # Only lounge members can vote.
     membership = db.query(LoungeMember).filter(
         LoungeMember.lounge_id == lounge_id,
-        LoungeMember.user_id == vote_data.user_id
+        LoungeMember.user_id == current_user.id
     ).first()
 
     if not membership:
@@ -427,7 +461,7 @@ async def vote_for_queue_item(
     # Find this user's existing vote.
     existing_vote = db.query(QueueVote).filter(
         QueueVote.queue_item_id == queue_item_id,
-        QueueVote.user_id == vote_data.user_id
+        QueueVote.user_id == current_user.id
     ).first()
 
     if vote_data.vote == 0:
@@ -440,14 +474,13 @@ async def vote_for_queue_item(
     else:
         new_vote = QueueVote(
             queue_item_id=queue_item_id,
-            user_id=vote_data.user_id,
+            user_id=current_user.id,
             vote=vote_data.vote
         )
         db.add(new_vote)
-
     db.commit()
 
-       # Calculate the net vote score for this queue item.
+    # Calculate the net vote score for this queue item.
     vote_score = db.query(
         func.coalesce(func.sum(QueueVote.vote), 0)
     ).filter(
