@@ -5,3 +5,14 @@ venv/
 .env
 
 *.db
+# React / Vite
+frontend/node_modules/
+frontend/dist/
+
+# Environment files
+.env.*
+frontend/.env
+frontend/.env.*
+
+# Build and debug files
+npm-debug.log*

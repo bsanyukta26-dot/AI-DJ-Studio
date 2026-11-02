@@ -11,6 +11,7 @@ from fastapi import (
 
 from sqlalchemy.orm import Session
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
 
 bearer_scheme = HTTPBearer()
 from sqlalchemy import func
@@ -47,6 +48,19 @@ from app.security import (
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI DJ Studio")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def seed_tracks():
     db = SessionLocal()
@@ -207,6 +221,15 @@ def create_lounge(
     )
 
     db.add(new_lounge)
+    db.flush()
+
+    # Automatically add the creator as a lounge member
+    membership = LoungeMember(
+        lounge_id=new_lounge.id,
+        user_id=current_user.id
+    )
+
+    db.add(membership)
     db.commit()
     db.refresh(new_lounge)
 
@@ -218,7 +241,7 @@ def create_lounge(
         "invite_code": new_lounge.invite_code,
         "vibe": new_lounge.vibe,
         "target_bpm": new_lounge.target_bpm,
-        "bpm_tolerance": new_lounge.bpm_tolerance
+        "bpm_tolerance": new_lounge.bpm_t
     }
 
 @app.post("/lounges/join")
@@ -355,7 +378,7 @@ async def add_to_queue(
             }
         }
     )
-    
+
     return {
         "message": "Track added to queue successfully",
         "queue_item_id": queue_item.id,
@@ -365,7 +388,7 @@ async def add_to_queue(
         "added_by": user.id,
         "position": queue_item.position
     }
-    
+
 @app.get("/lounges/{lounge_id}/queue")
 def get_lounge_queue(
     lounge_id: int,
