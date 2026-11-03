@@ -1,10 +1,11 @@
 
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiRequest } from './services/api';
 import './App.css';
 
 function App() {
+  const wsRef = useRef(null);
   const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -28,6 +29,9 @@ function App() {
   const [queueItems, setQueueItems] = useState([]);
   const [wsStatus, setWsStatus] = useState('Disconnected');
   const [connectedClients, setConnectedClients] = useState(0);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatError, setChatError] = useState('');
   const [selectedTrackId, setSelectedTrackId] = useState('');
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState('');
@@ -46,6 +50,7 @@ function App() {
     if (!activeLounge || !user) return;
     const wsUrl = `ws://127.0.0.1:8000/ws/lounges/${activeLounge.id}?token=${encodeURIComponent(user.token)}`;
     const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
     setWsStatus('Connecting');
     socket.onopen = () => {
       setWsStatus('Connected');
@@ -63,6 +68,15 @@ function App() {
           data.payload.connected_clients || 0
         );
       }
+      if (data.event === 'lounge.chat.message') {
+        setChatMessages((previousMessages) => [
+          ...previousMessages,
+          {
+            username: data.payload.username,
+            message: data.payload.message,
+          },
+        ]);
+      }
     };
     socket.onerror = () => {
       setWsStatus('Connection error');
@@ -71,6 +85,9 @@ function App() {
       setWsStatus('Disconnected');
     };
     return () => {
+      if (wsRef.current === socket) {
+        wsRef.current = null;
+      }
       socket.close();
     };
   }, [activeLounge, user]);
@@ -286,6 +303,22 @@ function App() {
     } finally {
       setLoungeLoading(false);
     }
+  }
+  function sendChatMessage(event) {
+    event.preventDefault();
+    const message = chatInput.trim();
+    if (!message) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setChatError('Chat is not connected. Please wait and try again.');
+      return;
+    }
+    wsRef.current.send(JSON.stringify({
+      event: 'lounge.chat.message',
+      payload: { message: message },
+    }));
+
+    setChatInput('');
+    setChatError('');
   }
 
   function logout() {
@@ -546,6 +579,50 @@ function App() {
         {queueLoading ? 'Loading...' : 'Refresh Queue'}
       </button>
     </div>
+
+    {activeLounge && (
+  <section className="chat-section">
+    <div className="section-heading">
+      <div>
+        <p className="eyebrow">LOUNGE CONVERSATION</p>
+        <h2>Live Chat</h2>
+      </div>
+    </div>
+
+    <div className="chat-messages" aria-live="polite">
+      {chatMessages.length === 0 ? (
+        <p>No messages yet. Say hello!</p>
+      ) : (
+        chatMessages.map((item, index) => (
+          <article className="chat-message" key={index}>
+            <strong>{item.username}</strong>
+            <p>{item.message}</p>
+          </article>
+        ))
+      )}
+    </div>
+
+    <form className="chat-form" onSubmit={sendChatMessage}>
+      <input
+        type="text"
+        value={chatInput}
+        onChange={(event) => setChatInput(event.target.value)}
+        maxLength={1000}
+        placeholder="Type a message..."
+      />
+
+      <button
+        type="submit"
+        className="primary-button"
+        disabled={!chatInput.trim() || wsStatus !== 'Connected'}
+      >
+        Send
+      </button>
+    </form>
+
+    {chatError && <p className="message error">{chatError}</p>}
+  </section>
+)}
 
     <form className="queue-form" onSubmit={addToQueue}>
       <label htmlFor="queue-track">Select a track</label>

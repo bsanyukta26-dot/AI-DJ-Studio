@@ -241,7 +241,7 @@ def create_lounge(
         "invite_code": new_lounge.invite_code,
         "vibe": new_lounge.vibe,
         "target_bpm": new_lounge.target_bpm,
-        "bpm_tolerance": new_lounge.bpm_t
+        "bpm_tolerance": new_lounge.bpm_tolerance
     }
 
 @app.post("/lounges/join")
