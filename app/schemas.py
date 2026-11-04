@@ -1,5 +1,6 @@
 
 from pydantic import BaseModel, EmailStr, Field
+from typing import Optional
 
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
@@ -49,3 +50,16 @@ class QueueAdd(BaseModel):
 class QueueVoteCreate(BaseModel):
     user_id: int = Field(..., gt=0)
     vote: int = Field(1, ge=-1, le=1)
+
+class BattleCreate(BaseModel):
+    lounge_id: int = Field(..., gt=0)
+    challenger_id: int = Field(..., gt=0)
+    opponent_id: int = Field(..., gt=0)
+
+class BattleStatusUpdate(BaseModel):
+    status: str = Field(
+        ...,
+        pattern="^(active|completed)$"
+    )
+
+    winner_id: Optional[int] = Field(None, gt=0)

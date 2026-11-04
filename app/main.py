@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from fastapi import (
     FastAPI,
     Depends,
@@ -23,6 +24,7 @@ from app.model.lounge import Lounge
 from app.model.lounge_member import LoungeMember
 from app.model.queue_item import QueueItem
 from app.model.queue_vote import QueueVote
+from app.model.battle import Battle
 from app.queue_manager import queue_manager
 
 from app.schemas import (
@@ -36,6 +38,8 @@ from app.schemas import (
     LoungeJoin,
     QueueAdd,
     QueueVoteCreate,
+    BattleCreate,
+    BattleStatusUpdate,
 )
 
 from app.security import (
@@ -804,3 +808,185 @@ async def lounge_queue_websocket(
 
     except WebSocketDisconnect:
         queue_manager.disconnect(lounge_id, websocket)
+
+@app.post("/lounges/{lounge_id}/battles")
+def create_battle(
+    lounge_id: int,
+    battle: BattleCreate,
+    db: Session = Depends(get_db)
+):
+    if battle.lounge_id != lounge_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Lounge ID mismatch"
+        )
+
+    if battle.challenger_id == battle.opponent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="A DJ cannot battle themselves"
+        )
+
+    lounge = db.query(Lounge).filter(
+        Lounge.id == lounge_id
+    ).first()
+
+    if not lounge:
+        raise HTTPException(
+            status_code=404,
+            detail="Lounge not found"
+        )
+
+    challenger = db.query(User).filter(
+        User.id == battle.challenger_id
+    ).first()
+
+    opponent = db.query(User).filter(
+        User.id == battle.opponent_id
+    ).first()
+
+    if not challenger or not opponent:
+        raise HTTPException(
+            status_code=404,
+            detail="DJ user not found"
+        )
+
+    challenger_member = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == lounge_id,
+        LoungeMember.user_id == battle.challenger_id
+    ).first()
+
+    opponent_member = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == lounge_id,
+        LoungeMember.user_id == battle.opponent_id
+    ).first()
+
+    if not challenger_member or not opponent_member:
+        raise HTTPException(
+            status_code=403,
+            detail="Both DJs must join the lounge"
+        )
+
+    existing_battle = db.query(Battle).filter(
+        Battle.lounge_id == lounge_id,
+        Battle.status.in_(["pending", "active"])
+    ).first()
+
+    if existing_battle:
+        raise HTTPException(
+            status_code=409,
+            detail="An active or pending battle already exists"
+        )
+
+    new_battle = Battle(
+        lounge_id=lounge_id,
+        challenger_id=battle.challenger_id,
+        opponent_id=battle.opponent_id,
+        status="pending"
+    )
+
+    db.add(new_battle)
+    db.commit()
+    db.refresh(new_battle)
+
+    return {
+        "message": "DJ battle created successfully",
+        "battle_id": new_battle.id,
+        "lounge_id": new_battle.lounge_id,
+        "challenger_id": new_battle.challenger_id,
+        "opponent_id": new_battle.opponent_id,
+        "status": new_battle.status
+    }
+
+@app.get("/lounges/{lounge_id}/battles")
+def get_lounge_battles(
+    lounge_id: int,
+    db: Session = Depends(get_db)
+):
+    lounge = db.query(Lounge).filter(
+        Lounge.id == lounge_id
+    ).first()
+
+    if not lounge:
+        raise HTTPException(
+            status_code=404,
+            detail="Lounge not found"
+        )
+
+    battles = db.query(Battle).filter(
+        Battle.lounge_id == lounge_id
+    ).order_by(Battle.created_at.desc()).all()
+
+    return [
+        {
+            "battle_id": battle.id,
+            "challenger_id": battle.challenger_id,
+            "opponent_id": battle.opponent_id,
+            "status": battle.status,
+            "winner_id": battle.winner_id,
+            "created_at": battle.created_at
+        }
+        for battle in battles
+    ]
+
+@app.patch("/battles/{battle_id}/status")
+def update_battle_status(
+    battle_id: int,
+    update: BattleStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    battle = db.query(Battle).filter(
+        Battle.id == battle_id
+    ).first()
+
+    if not battle:
+        raise HTTPException(
+            status_code=404,
+            detail="Battle not found"
+        )
+
+    if battle.status == "pending" and update.status == "active":
+        if update.winner_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Winner cannot be set before battle completion"
+            )
+
+        battle.status = "active"
+        battle.started_at = datetime.utcnow()
+
+    elif battle.status == "active" and update.status == "completed":
+        if update.winner_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Winner ID is required to complete a battle"
+            )
+
+        if update.winner_id not in [
+            battle.challenger_id,
+            battle.opponent_id
+        ]:
+            raise HTTPException(
+                status_code=400,
+                detail="Winner must be one of the battling DJs"
+            )
+
+        battle.status = "completed"
+        battle.winner_id = update.winner_id
+        battle.ended_at = datetime.utcnow()
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid battle status transition"
+        )
+
+    db.commit()
+    db.refresh(battle)
+
+    return {
+        "message": "Battle status updated successfully",
+        "battle_id": battle.id,
+        "status": battle.status,
+        "winner_id": battle.winner_id
+    }
