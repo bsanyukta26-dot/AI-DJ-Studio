@@ -35,6 +35,10 @@ function App() {
   const [selectedTrackId, setSelectedTrackId] = useState('');
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState('');
+  const [opponentId, setOpponentId] = useState('');
+  const [battles, setBattles] = useState([]);
+  const [battleLoading, setBattleLoading] = useState(false);
+  const [battleError, setBattleError] = useState('');
 
   useEffect(() => {
     if (user) {
@@ -44,6 +48,11 @@ function App() {
   useEffect(() => {
     if (activeLounge && user) {
       loadQueue();
+    }
+  }, [activeLounge, user]);
+  useEffect(() => {
+    if (activeLounge && user) {
+      loadBattles();
     }
   }, [activeLounge, user]);
   useEffect(() => {
@@ -118,6 +127,85 @@ function App() {
       setQueueError(err.message);
     } finally {
       setQueueLoading(false);
+    }
+  }
+
+  async function loadBattles() {
+    if (!activeLounge || !user) return;
+
+    setBattleLoading(true);
+    setBattleError('');
+
+    try {
+      const result = await apiRequest(
+        `/lounges/${activeLounge.id}/battles`,
+        {},
+        user.token
+      );
+
+      setBattles(Array.isArray(result) ? result : []);
+    } catch (err) {
+      setBattleError(err.message);
+    } finally {
+      setBattleLoading(false);
+    }
+  }
+
+  async function createBattle(event) {
+    event.preventDefault();
+
+    if (!opponentId || Number(opponentId) === user.userId) {
+      setBattleError('Enter another DJ user ID.');
+      return;
+    }
+
+    setBattleError('');
+
+    try {
+      await apiRequest(
+        `/lounges/${activeLounge.id}/battles`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            lounge_id: activeLounge.id,
+            challenger_id: user.userId,
+            opponent_id: Number(opponentId)
+          })
+        },
+        user.token
+      );
+
+      setOpponentId('');
+      setSuccess('DJ Battle created successfully!');
+      await loadBattles();
+    } catch (err) {
+      setBattleError(err.message);
+    }
+  }
+
+  async function updateBattleStatus(battleId, status, winnerId = null) {
+    setBattleError('');
+
+    try {
+      const body = { status };
+
+      if (winnerId !== null) {
+        body.winner_id = winnerId;
+      }
+
+      await apiRequest(
+        `/battles/${battleId}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(body)
+        },
+        user.token
+      );
+
+      setSuccess('Battle status updated successfully!');
+      await loadBattles();
+    } catch (err) {
+      setBattleError(err.message);
     }
   }
 
@@ -695,6 +783,114 @@ function App() {
         ))
       )}
     </div>
+  </section>
+)}
+
+    {activeLounge && (
+  <section className="studio-card battle-section">
+    <h2>⚔ DJ Battle Arena</h2>
+    <p>Challenge another DJ and compete in your music lounge.</p>
+
+    <form onSubmit={createBattle}>
+      <label>Opponent DJ User ID</label>
+
+      <input
+        type="number"
+        min="1"
+        value={opponentId}
+        onChange={(e) => setOpponentId(e.target.value)}
+        placeholder="Enter opponent user ID"
+        required
+      />
+
+      <button
+        className="primary-button"
+        disabled={!opponentId || battleLoading}
+      >
+        Create Battle
+      </button>
+    </form>
+
+    <div className="section-heading">
+      <h3>Battle History</h3>
+
+      <button
+        className="secondary-button"
+        onClick={loadBattles}
+        disabled={battleLoading}
+      >
+        Refresh
+      </button>
+    </div>
+
+    {battleError && (
+      <p className="message error">{battleError}</p>
+    )}
+
+    {battleLoading && <p>Loading battles...</p>}
+
+    {battles.length === 0 && !battleLoading ? (
+      <p>No battles found in this lounge.</p>
+    ) : (
+      battles.map((battle) => (
+        <article className="queue-item" key={battle.battle_id}>
+          <div className="track-details">
+            <h3>Battle #{battle.battle_id}</h3>
+
+            <p>
+              DJ #{battle.challenger_id} vs DJ #{battle.opponent_id}
+            </p>
+
+            <p>Status: {battle.status.toUpperCase()}</p>
+
+            {battle.winner_id && (
+              <p>Winner: DJ #{battle.winner_id}</p>
+            )}
+          </div>
+
+          {battle.status === 'pending' && (
+            <button
+              className="primary-button"
+              onClick={() =>
+                updateBattleStatus(battle.battle_id, 'active')
+              }
+            >
+              Start Battle
+            </button>
+          )}
+
+          {battle.status === 'active' && (
+            <div className="queue-actions">
+              <button
+                className="vote-button"
+                onClick={() =>
+                  updateBattleStatus(
+                    battle.battle_id,
+                    'completed',
+                    battle.challenger_id
+                  )
+                }
+              >
+                DJ #{battle.challenger_id} Wins
+              </button>
+
+              <button
+                className="vote-button"
+                onClick={() =>
+                  updateBattleStatus(
+                    battle.battle_id,
+                    'completed',
+                    battle.opponent_id
+                  )
+                }
+              >
+                DJ #{battle.opponent_id} Wins
+              </button>
+            </div>
+          )}
+        </article>
+      ))
+    )}
   </section>
 )}
 
