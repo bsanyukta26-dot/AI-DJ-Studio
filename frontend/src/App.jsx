@@ -57,7 +57,8 @@ function App() {
   }, [activeLounge, user]);
   useEffect(() => {
     if (!activeLounge || !user) return;
-    const wsUrl = `ws://127.0.0.1:8000/ws/lounges/${activeLounge.id}?token=${encodeURIComponent(user.token)}`;
+    const wsBaseUrl = API_BASE_URL.replace(/^http/, 'ws');
+    const wsUrl = `${wsBaseUrl}/ws/lounges/${activeLounge.id}?token=${encodeURIComponent(user.token)}`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
     setWsStatus('Connecting');

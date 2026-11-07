@@ -1,3 +1,4 @@
+import os
 import json
 from datetime import datetime
 from fastapi import (
@@ -56,10 +57,12 @@ app = FastAPI(title="AI DJ Studio")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        origin.strip()
+        for origin in os.getenv(
+            "FRONTEND_ORIGINS",
+            "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+        ).split(",")
+    if origin.strip()
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -813,7 +816,8 @@ async def lounge_queue_websocket(
 def create_battle(
     lounge_id: int,
     battle: BattleCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     if battle.lounge_id != lounge_id:
         raise HTTPException(
@@ -901,7 +905,8 @@ def create_battle(
 @app.get("/lounges/{lounge_id}/battles")
 def get_lounge_battles(
     lounge_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     lounge = db.query(Lounge).filter(
         Lounge.id == lounge_id
@@ -913,6 +918,16 @@ def get_lounge_battles(
             detail="Lounge not found"
         )
 
+    membership = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == lounge_id,
+        LoungeMember.user_id == current_user.id
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=403,
+            detail="Join this lounge to view its battles"
+        )
     battles = db.query(Battle).filter(
         Battle.lounge_id == lounge_id
     ).order_by(Battle.created_at.desc()).all()
@@ -933,7 +948,8 @@ def get_lounge_battles(
 def update_battle_status(
     battle_id: int,
     update: BattleStatusUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     battle = db.query(Battle).filter(
         Battle.id == battle_id
@@ -943,6 +959,26 @@ def update_battle_status(
         raise HTTPException(
             status_code=404,
             detail="Battle not found"
+        )
+
+    lounge = db.query(Lounge).filter(
+        Lounge.id == battle.lounge_id
+    ).first()
+
+    if not lounge:
+        raise HTTPException(
+            status_code=404,
+            detail="Lounge not found"
+        )
+
+    if current_user.id not in [
+        battle.challenger_id,
+        battle.opponent_id,
+        lounge.owner_id
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the battling DJs or lounge owner can update this battle"
         )
 
     if battle.status == "pending" and update.status == "active":
