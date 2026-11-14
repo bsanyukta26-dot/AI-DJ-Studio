@@ -10,7 +10,7 @@ from fastapi import (
     Header,
     Security,
 )
-
+from app.acoustic_matcher import rank_candidates
 from sqlalchemy.orm import Session
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -184,6 +184,45 @@ def get_tracks(db: Session = Depends(get_db)):
             "valence": track.valence
         }
         for track in tracks
+    ]
+
+@app.get("/tracks/{track_id}/recommendations")
+def get_track_recommendations(
+    track_id: int,
+    db: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    source_track = db.query(Track).filter(
+        Track.id == track_id
+    ).first()
+
+    if not source_track:
+        raise HTTPException(
+            status_code=404,
+            detail="Source track not found"
+        )
+
+    candidates = db.query(Track).filter(
+        Track.id != track_id
+    ).all()
+
+    ranked_tracks = rank_candidates(
+        source_track,
+        candidates
+    )
+
+    return [
+        {
+            "id": item["track"].id,
+            "title": item["track"].title,
+            "artist": item["track"].artist,
+            "bpm": item["track"].bpm,
+            "camelot_key": item["track"].camelot_key,
+            "energy": item["track"].energy,
+            "match_score": item["match_score"]
+        }
+        for item in ranked_tracks
     ]
 
 import secrets
