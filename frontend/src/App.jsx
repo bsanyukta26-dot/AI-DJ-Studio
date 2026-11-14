@@ -20,6 +20,10 @@ function App() {
   });
 
   const [tracks, setTracks] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState('');
+  const [selectedRecommendationTrack, setSelectedRecommendationTrack] = useState(null);
   const [loungeName, setLoungeName] = useState('');
   const [vibe, setVibe] = useState('chill');
   const [targetBpm, setTargetBpm] = useState(120);
@@ -108,6 +112,27 @@ function App() {
       setTracks(result);
     } catch (err) {
       setError('Could not load tracks: ' + err.message);
+    }
+  }
+
+  async function loadRecommendations(trackId) {
+    setRecommendationLoading(true);
+    setRecommendationError('');
+    setRecommendations([]);
+    setSelectedRecommendationTrack(trackId);
+
+    try {
+      const result = await apiRequest(
+        `/tracks/${trackId}/recommendations`
+      );
+
+      setRecommendations(result);
+    } catch (err) {
+      setRecommendationError(
+        'Could not load recommendations: ' + err.message
+      );
+    } finally {
+      setRecommendationLoading(false);
     }
   }
 
@@ -917,6 +942,13 @@ function App() {
                   <span>{track.bpm} BPM</span>
                   <span>{track.camelot_key}</span>
                 </div>
+                <button
+                className="secondary-button"
+                onClick={() => loadRecommendations(track.id)}
+                disabled={recommendationLoading}
+                >
+                Get AI Recommendations
+                </button>
                 <div className="track-metrics">
                   Energy: {Math.round(track.energy * 100)}%
                   <div className="metric-bar">
@@ -935,6 +967,44 @@ function App() {
         {tracks.length === 0 && (
           <p>No tracks found. Try refreshing the library.</p>
         )}
+        {selectedRecommendationTrack !== null && (
+  <div className="recommendation-section">
+    <h3>AI Recommended Tracks</h3>
+
+    {recommendationLoading && (
+      <p>Finding compatible tracks...</p>
+    )}
+
+    {recommendationError && (
+      <p className="message error">{recommendationError}</p>
+    )}
+
+    {!recommendationLoading &&
+      !recommendationError &&
+      recommendations.length === 0 && (
+        <p>No compatible tracks found for this selection.</p>
+      )}
+
+    <div className="track-grid">
+      {recommendations.map((track) => (
+        <article className="track-card" key={track.id}>
+          <div className="track-art">♫</div>
+          <div className="track-details">
+            <h3>{track.title}</h3>
+            <p>{track.artist}</p>
+            <div className="track-tags">
+              <span>{track.bpm} BPM</span>
+              <span>{track.camelot_key}</span>
+            </div>
+            <p>
+              Match Score: {track.match_score}%
+            </p>
+          </div>
+        </article>
+      ))}
+    </div>
+  </div>
+)}
       </section>
 
       <footer>AI-DJ-STUDIO · COLLABORATE THROUGH MUSIC</footer>
