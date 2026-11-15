@@ -103,10 +103,18 @@ function App() {
       }
     };
 
-    socket.onerror = () => {
+    socket.onerror = (event) => {
+      console.error('WebSocket error:', event);
       setWsStatus('Connection error');
     };
-    socket.onclose = () => {
+
+    socket.onclose = (event) => {
+      console.log(
+        'WebSocket closed:',
+        event.code,
+        event.reason,
+        event.wasClean
+      );
       setWsStatus('Disconnected');
     };
     return () => {
