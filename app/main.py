@@ -27,6 +27,7 @@ from app.model.queue_item import QueueItem
 from app.model.queue_vote import QueueVote
 from app.model.battle import Battle
 from app.queue_manager import queue_manager
+from app.sentiment_analyzer import analyze_sentiment, update_room_sentiment
 
 from app.schemas import (
     UserRegister,
@@ -837,14 +838,32 @@ async def lounge_queue_websocket(
             if not text or len(text) > 1000:
                 continue
 
+                        # Analyze the individual chat message.
+            message_sentiment = analyze_sentiment(text)
+
+            # Update the rolling sentiment for this lounge.
+            room_sentiment = update_room_sentiment(lounge_id, text)
+
+            # Broadcast the chat message with its individual sentiment.
             await queue_manager.broadcast(
                 lounge_id,
                 {
                     "event": "lounge.chat.message",
                     "payload": {
                         "username": username,
-                        "message": text
+                        "message": text,
+                        "sentiment": message_sentiment["sentiment"],
+                        "sentiment_score": message_sentiment["score"]
                     }
+                }
+            )
+
+            # Broadcast the updated overall lounge sentiment.
+            await queue_manager.broadcast(
+                lounge_id,
+                {
+                    "event": "lounge.sentiment.update",
+                    "payload": room_sentiment
                 }
             )
 

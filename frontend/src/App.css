@@ -735,3 +735,25 @@ button {
   color: #4f46e5;
   font-weight: 700;
 }
+
+.room-sentiment {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #f3e8ff;
+  border: 1px solid #d8b4fe;
+  border-radius: 10px;
+  color: #581c87;
+  font-size: 14px;
+}
+
+.room-sentiment strong {
+  font-weight: 700;
+}
+
+.room-sentiment span {
+  font-weight: 700;
+}
+
+.room-sentiment p {
+  margin: 5px 0 0;
+}

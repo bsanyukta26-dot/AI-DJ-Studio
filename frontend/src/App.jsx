@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect, useRef } from 'react';
-import { apiRequest } from './services/api';
+import { apiRequest, API_BASE_URL } from './services/api';
 import './App.css';
 
 function App() {
@@ -36,6 +36,11 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatError, setChatError] = useState('');
+  const [roomSentiment, setRoomSentiment] = useState({
+    sentiment: 'neutral',
+    score: 0,
+    message_count: 0,
+  });
   const [selectedTrackId, setSelectedTrackId] = useState('');
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState('');
@@ -71,6 +76,7 @@ function App() {
     };
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      console.log('WEBSOCKET EVENT:', data.event, JSON.stringify(data.payload));
       if (data.event === 'lounge.queue.update') {
         const updatedQueue = data.payload.queue;
         if (updatedQueue) {
@@ -91,7 +97,12 @@ function App() {
           },
         ]);
       }
+      if (data.event === 'lounge.sentiment.update') {
+        console.log('ROOM SENTIMENT DATA:', data.payload);
+        setRoomSentiment(data.payload);
+      }
     };
+
     socket.onerror = () => {
       setWsStatus('Connection error');
     };
@@ -700,6 +711,18 @@ function App() {
       <div>
         <p className="eyebrow">LOUNGE CONVERSATION</p>
         <h2>Live Chat</h2>
+        <div className="room-sentiment">
+          <strong>Room Mood: </strong>
+          <span>
+            {roomSentiment.sentiment.toUpperCase()}
+          </span>
+          <p>
+            Sentiment Score: {roomSentiment.score}
+          </p>
+          <p>
+            Messages Analyzed: {roomSentiment.message_count}
+          </p>
+        </div>
       </div>
     </div>
 
