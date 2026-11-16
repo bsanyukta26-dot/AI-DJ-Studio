@@ -27,7 +27,10 @@ function App() {
   const [loungeName, setLoungeName] = useState('');
   const [vibe, setVibe] = useState('chill');
   const [targetBpm, setTargetBpm] = useState(120);
-  const [inviteCode, setInviteCode] = useState('');
+  const [inviteCode, setInviteCode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('invite') || '').trim().toUpperCase();
+  });
   const [activeLounge, setActiveLounge] = useState(null);
   const [loungeLoading, setLoungeLoading] = useState(false);
   const [queueItems, setQueueItems] = useState([]);
@@ -142,7 +145,9 @@ function App() {
 
     try {
       const result = await apiRequest(
-        `/tracks/${trackId}/recommendations`
+        `/tracks/${trackId}/recommendations`,
+        {},
+        user.token
       );
 
       setRecommendations(result);
@@ -366,6 +371,56 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function copyInvitationText(text, message) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+
+        if (!copied) {
+          throw new Error('Copy failed');
+        }
+      }
+
+      setSuccess(message);
+      setError('');
+    } catch (err) {
+      setError('Unable to copy. Please copy the text manually.');
+    }
+  }
+
+  function copyInviteCode() {
+    if (!activeLounge?.invite_code) return;
+
+    copyInvitationText(
+      activeLounge.invite_code,
+      'Invitation code copied successfully!'
+    );
+  }
+
+  function copyInviteLink() {
+    if (!activeLounge?.invite_code) return;
+
+    const link =
+      window.location.origin +
+      '/?invite=' +
+      encodeURIComponent(activeLounge.invite_code);
+
+    copyInvitationText(
+      link,
+      'Invitation link copied successfully!'
+    );
   }
 
   async function createLounge(event) {
@@ -612,10 +667,33 @@ function App() {
           <h2>{activeLounge.name}</h2>
           <p>Lounge ID: {activeLounge.id}</p>
           {activeLounge.invite_code && (
-            <p>
-              Invite code: <strong>{activeLounge.invite_code}</strong>
-            </p>
+            <div className="invitation-sharing">
+              <p>
+                 Invite code: <strong>{activeLounge.invite_code}</strong>
+              </p>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={copyInviteCode}
+              >
+                Copy Invite Code
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={copyInviteLink}
+              >
+                Copy Invitation Link
+              </button>
+
+              <p className="role-note">
+                Share this link with people you want to invite to your lounge.
+              </p>
+            </div>
           )}
+
         </section>
       )}
 

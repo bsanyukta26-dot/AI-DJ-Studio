@@ -190,14 +190,14 @@ def get_tracks(db: Session = Depends(get_db)):
 @app.get("/tracks/{track_id}/recommendations")
 def get_track_recommendations(
     track_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     from fastapi import HTTPException
 
     source_track = db.query(Track).filter(
         Track.id == track_id
     ).first()
-
     if not source_track:
         raise HTTPException(
             status_code=404,
@@ -315,10 +315,12 @@ def join_lounge(
     ).first()
 
     if existing_member:
-        raise HTTPException(
-            status_code=409,
-            detail="User has already joined this lounge"
-        )
+       return {
+         "message": "Already a member of this lounge",
+         "lounge_id": lounge.id,
+         "lounge_name": lounge.name,
+         "user_id": user.id
+        }
 
     membership = LoungeMember(
         lounge_id=lounge.id,
