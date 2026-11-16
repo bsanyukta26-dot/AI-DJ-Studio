@@ -1,4 +1,5 @@
 import time
+import logging
 from typing import Dict, List
 from fastapi import WebSocket
 
@@ -90,8 +91,11 @@ class QueueConnectionManager:
         for websocket in connections[:]:
             try:
                 await websocket.send_json(event_message)
-            except Exception:
+            except Exception as exc:
+                logging.exception(
+                    "WebSocket broadcast failed for lounge=%s",
+                    lounge_id
+                )
                 self.disconnect(lounge_id, websocket)
-
 
 queue_manager = QueueConnectionManager()

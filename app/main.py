@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from datetime import datetime
 from fastapi import (
     FastAPI,
@@ -868,8 +869,11 @@ async def lounge_queue_websocket(
                     "payload": room_sentiment
                 }
             )
-
     except WebSocketDisconnect:
+        logging.info("WebSocket disconnected: lounge=%s user=%s", lounge_id, user_id)
+        queue_manager.disconnect(lounge_id, websocket)
+    except Exception:
+        logging.exception("WebSocket error: lounge=%s user=%s", lounge_id, user_id)
         queue_manager.disconnect(lounge_id, websocket)
 
 @app.post("/lounges/{lounge_id}/battles")
