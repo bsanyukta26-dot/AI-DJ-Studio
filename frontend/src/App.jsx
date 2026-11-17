@@ -51,6 +51,8 @@ function App() {
   const [battles, setBattles] = useState([]);
   const [battleLoading, setBattleLoading] = useState(false);
   const [battleError, setBattleError] = useState('');
+  const [battleSubmissions, setBattleSubmissions] = useState({});
+  const [battleTrackSelections, setBattleTrackSelections] = useState({});
 
   useEffect(() => {
     if (user) {
@@ -193,8 +195,16 @@ function App() {
         user.token
       );
 
-      setBattles(Array.isArray(result) ? result : []);
-    } catch (err) {
+      const battleList = Array.isArray(result) ? result : [];
+      setBattles(battleList);
+
+      await Promise.all(
+        battleList
+          .filter(battle => battle.status === 'active')
+          .map(battle => loadBattleSubmissions(battle.battle_id))
+      );
+    } 
+    catch (err) {
       setBattleError(err.message);
     } finally {
       setBattleLoading(false);
@@ -254,6 +264,72 @@ function App() {
 
       setSuccess('Battle status updated successfully!');
       await loadBattles();
+    } catch (err) {
+      setBattleError(err.message);
+    }
+  }
+
+  async function loadBattleSubmissions(battleId) {
+    try {
+      const result = await apiRequest(
+        `/battles/${battleId}/submissions`,
+        {},
+        user.token
+      );
+  
+      setBattleSubmissions(prev => ({
+        ...prev,
+        [battleId]: result
+      }));
+    } catch (err) {
+      setBattleError(err.message);
+    }
+  }
+  
+  async function submitBattleTrack(event, battleId) {
+    event.preventDefault();
+  
+    const trackId = battleTrackSelections[battleId];
+  
+    if (!trackId) {
+      setBattleError('Please select a track.');
+      return;
+    }
+  
+    try {
+      await apiRequest(
+        `/battles/${battleId}/submissions`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            track_id: Number(trackId)
+          })
+        },
+        user.token
+      );
+  
+      setSuccess('Track submitted successfully!');
+      await loadBattleSubmissions(battleId);
+    } catch (err) {
+      setBattleError(err.message);
+    }
+  }
+  
+  async function voteBattleTrack(battleId, submissionId) {
+    try {
+      await apiRequest(
+        `/battles/${battleId}/votes`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            submission_id: submissionId
+          })
+        },
+        user.token
+      );
+  
+      setSuccess('Your vote has been recorded!');
+      await loadBattleSubmissions(battleId);
     } catch (err) {
       setBattleError(err.message);
     }
@@ -921,7 +997,7 @@ function App() {
   </section>
 )}
 
-    {activeLounge && (
+{activeLounge && (
   <section className="studio-card battle-section">
     <h2>⚔ DJ Battle Arena</h2>
     <p>Challenge another DJ and compete in your music lounge.</p>
@@ -964,7 +1040,7 @@ function App() {
 
     {battleLoading && <p>Loading battles...</p>}
 
-    {battles.length === 0 && !battleLoading ? (
+    {battles.length === 0 && !battleLoading ?(
       <p>No battles found in this lounge.</p>
     ) : (
       battles.map((battle) => (
@@ -994,40 +1070,99 @@ function App() {
             </button>
           )}
 
-          {battle.status === 'active' && (
-            <div className="queue-actions">
-              <button
-                className="vote-button"
-                onClick={() =>
-                  updateBattleStatus(
-                    battle.battle_id,
-                    'completed',
-                    battle.challenger_id
-                  )
-                }
-              >
-                DJ #{battle.challenger_id} Wins
-              </button>
+{battle.status === 'active' && (
+  <div className="battle-submission-section">
+    <h4>Soundclash Track Submissions</h4>
 
-              <button
-                className="vote-button"
-                onClick={() =>
-                  updateBattleStatus(
-                    battle.battle_id,
-                    'completed',
-                    battle.opponent_id
-                  )
-                }
-              >
-                DJ #{battle.opponent_id} Wins
-              </button>
-            </div>
+    {battleSubmissions[battle.battle_id]?.map(submission => (
+      <div className="queue-item" key={submission.submission_id}>
+        <div className="track-details">
+          <strong>{submission.track_title}</strong>
+          <p>{submission.artist}</p>
+          <p>Submitted by DJ #{submission.dj_id}</p>
+        </div>
+
+        {user.userId !== battle.challenger_id &&
+          user.userId !== battle.opponent_id && (
+            <button
+              className="vote-button"
+              onClick={() =>
+                voteBattleTrack(
+                  battle.battle_id,
+                  submission.submission_id
+                )
+              }
+            >
+              Vote for this track
+            </button>
           )}
+      </div>
+    ))}
+
+    {(user.userId === battle.challenger_id ||
+      user.userId === battle.opponent_id) &&
+      !(battleSubmissions[battle.battle_id] || [])
+        .some(item => item.dj_id === user.userId) && (
+        <form onSubmit={event =>
+          submitBattleTrack(event, battle.battle_id)
+        }>
+          <select
+            value={battleTrackSelections[battle.battle_id] || ''}
+            onChange={event =>
+              setBattleTrackSelections(prev => ({
+                ...prev,
+                [battle.battle_id]: event.target.value
+              }))
+            }
+            required
+          >
+            <option value="">Select your track</option>
+            {tracks.map(track => (
+              <option key={track.id} value={track.id}>
+                {track.title} - {track.artist}
+              </option>
+            ))}
+          </select>
+
+          <button className="primary-button" type="submit">
+            Submit Track
+          </button>
+        </form>
+      )}
+
+    {(user.userId === battle.challenger_id ||
+      user.userId === battle.opponent_id) &&
+      (battleSubmissions[battle.battle_id] || []).length === 2 && (
+        <button
+          className="primary-button"
+          onClick={() =>
+            updateBattleStatus(battle.battle_id, 'completed')
+          }
+        >
+          Complete Battle & Add Winner to Queue
+        </button>
+      )}
+  </div>
+)}
         </article>
       ))
     )}
   </section>
 )}
+
+    {(user.userId === battle.challenger_id ||
+      user.userId === battle.opponent_id) &&
+      (battleSubmissions[battle.battle_id] || []).length === 2 && (
+        <button
+          className="primary-button"
+          onClick={() =>
+            updateBattleStatus(battle.battle_id, 'completed')
+          }
+        >
+          Complete Battle & Add Winner to Queue
+        </button>
+      )}
+    
 
       <section className="track-section">
         <div className="section-heading">
