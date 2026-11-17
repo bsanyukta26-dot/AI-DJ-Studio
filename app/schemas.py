@@ -63,3 +63,10 @@ class BattleStatusUpdate(BaseModel):
     )
 
     winner_id: Optional[int] = Field(None, gt=0)
+
+class BattleSubmissionCreate(BaseModel):
+    track_id: int = Field(..., gt=0)
+
+
+class BattleVoteCreate(BaseModel):
+    submission_id: int = Field(..., gt=0)

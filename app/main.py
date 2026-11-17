@@ -27,6 +27,8 @@ from app.model.lounge_member import LoungeMember
 from app.model.queue_item import QueueItem
 from app.model.queue_vote import QueueVote
 from app.model.battle import Battle
+from app.model.battle_submission import BattleSubmission
+from app.model.battle_vote import BattleVote
 from app.queue_manager import queue_manager
 from app.sentiment_analyzer import analyze_sentiment, update_room_sentiment
 
@@ -43,6 +45,8 @@ from app.schemas import (
     QueueVoteCreate,
     BattleCreate,
     BattleStatusUpdate,
+    BattleSubmissionCreate,
+    BattleVoteCreate,
 )
 
 from app.security import (
@@ -1056,31 +1060,54 @@ def update_battle_status(
         battle.started_at = datetime.utcnow()
 
     elif battle.status == "active" and update.status == "completed":
-        if update.winner_id is None:
+        submissions = db.query(BattleSubmission).filter(
+            BattleSubmission.battle_id == battle_id
+        ).all()
+
+        if len(submissions) != 2:
             raise HTTPException(
                 status_code=400,
-                detail="Winner ID is required to complete a battle"
+                detail="Both DJs must submit a track"
             )
 
-        if update.winner_id not in [
-            battle.challenger_id,
-            battle.opponent_id
-        ]:
-            raise HTTPException(
-                status_code=400,
-                detail="Winner must be one of the battling DJs"
-            )
+        vote_counts = {
+            item.id: db.query(BattleVote).filter(
+                BattleVote.submission_id == item.id
+            ).count()
+            for item in submissions
+        }
 
-        battle.status = "completed"
-        battle.winner_id = update.winner_id
-        battle.ended_at = datetime.utcnow()
-
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid battle status transition"
+        winning_submission = max(
+            submissions,
+            key=lambda item: vote_counts[item.id]
         )
 
+        if vote_counts[winning_submission.id] == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one vote is required"
+            )
+
+        if update.winner_id is not None and update.winner_id != winning_submission.dj_id:
+            raise HTTPException(
+            status_code=400,
+            detail="Winner ID does not match the listener vote result"
+            )
+
+        battle.winner_id = winning_submission.dj_id
+        battle.status = "completed"
+        battle.ended_at = datetime.utcnow()
+
+        last_item = db.query(QueueItem).filter(
+            QueueItem.lounge_id == battle.lounge_id
+        ).order_by(QueueItem.position.desc()).first()
+
+        db.add(QueueItem(
+            lounge_id=battle.lounge_id,
+            track_id=winning_submission.track_id,
+            added_by=winning_submission.dj_id,
+            position=1 if last_item is None else last_item.position + 1
+        ))
     db.commit()
     db.refresh(battle)
 
@@ -1090,3 +1117,127 @@ def update_battle_status(
         "status": battle.status,
         "winner_id": battle.winner_id
     }
+
+@app.post("/battles/{battle_id}/submissions")
+def submit_battle_track(
+    battle_id: int,
+    submission: BattleSubmissionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    battle = db.query(Battle).filter(Battle.id == battle_id).first()
+
+    if not battle or battle.status != "active":
+        raise HTTPException(400, "Battle is not active")
+
+    if current_user.id not in [battle.challenger_id, battle.opponent_id]:
+        raise HTTPException(403, "Only battling DJs can submit tracks")
+
+    track = db.query(Track).filter(
+        Track.id == submission.track_id
+    ).first()
+
+    if not track:
+        raise HTTPException(404, "Track not found")
+
+    existing = db.query(BattleSubmission).filter(
+        BattleSubmission.battle_id == battle_id,
+        BattleSubmission.dj_id == current_user.id
+    ).first()
+
+    if existing:
+        raise HTTPException(409, "You have already submitted a track")
+
+    record = BattleSubmission(
+        battle_id=battle_id,
+        dj_id=current_user.id,
+        track_id=track.id
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    return {"message": "Track submitted", "submission_id": record.id}
+
+
+@app.post("/battles/{battle_id}/votes")
+def vote_battle_track(
+    battle_id: int,
+    vote: BattleVoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    battle = db.query(Battle).filter(Battle.id == battle_id).first()
+
+    if not battle or battle.status != "active":
+        raise HTTPException(400, "Battle is not active")
+
+    if current_user.id in [battle.challenger_id, battle.opponent_id]:
+        raise HTTPException(403, "Battling DJs cannot vote")
+
+    membership = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == battle.lounge_id,
+        LoungeMember.user_id == current_user.id
+    ).first()
+
+    if not membership:
+        raise HTTPException(403, "Join the lounge before voting")
+
+    submission = db.query(BattleSubmission).filter(
+        BattleSubmission.id == vote.submission_id,
+        BattleSubmission.battle_id == battle_id
+    ).first()
+
+    if not submission:
+        raise HTTPException(404, "Battle submission not found")
+
+    existing = db.query(BattleVote).filter(
+        BattleVote.battle_id == battle_id,
+        BattleVote.user_id == current_user.id
+    ).first()
+
+    if existing:
+        raise HTTPException(409, "You have already voted")
+
+    db.add(BattleVote(
+        battle_id=battle_id,
+        submission_id=submission.id,
+        user_id=current_user.id
+    ))
+    db.commit()
+
+    return {"message": "Vote recorded successfully"}
+
+@app.get("/battles/{battle_id}/submissions")
+def get_battle_submissions(
+    battle_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    battle = db.query(Battle).filter(Battle.id == battle_id).first()
+
+    if not battle:
+        raise HTTPException(404, "Battle not found")
+
+    membership = db.query(LoungeMember).filter(
+        LoungeMember.lounge_id == battle.lounge_id,
+        LoungeMember.user_id == current_user.id
+    ).first()
+
+    if not membership:
+        raise HTTPException(403, "Join the lounge first")
+
+    submissions = db.query(BattleSubmission).filter(
+        BattleSubmission.battle_id == battle_id
+    ).all()
+
+    return [
+        {
+            "submission_id": item.id,
+            "dj_id": item.dj_id,
+            "track_id": item.track_id,
+            "track_title": item.track.title,
+            "artist": item.track.artist
+        }
+        for item in submissions
+    ]
