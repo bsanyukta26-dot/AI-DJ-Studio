@@ -1138,20 +1138,6 @@ function App() {
   </section>
 )}
 
-    {(user.userId === battle.challenger_id ||
-      user.userId === battle.opponent_id) &&
-      (battleSubmissions[battle.battle_id] || []).length === 2 && (
-        <button
-          className="primary-button"
-          onClick={() =>
-            updateBattleStatus(battle.battle_id, 'completed')
-          }
-        >
-          Complete Battle & Add Winner to Queue
-        </button>
-      )}
-    
-
       <section className="track-section">
         <div className="section-heading">
           <div>
