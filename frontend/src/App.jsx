@@ -71,6 +71,45 @@ function App() {
   }, [activeLounge, user]);
   useEffect(() => {
     if (!activeLounge || !user) return;
+  
+    const refreshBattleData = async () => {
+      try {
+        const result = await apiRequest(
+          `/lounges/${activeLounge.id}/battles`,
+          {},
+          user.token
+        );
+  
+        const battleList = Array.isArray(result) ? result : [];
+        setBattles(battleList);
+  
+        await Promise.all(
+          battleList
+            .filter(battle => battle.status === 'active')
+            .map(async battle => {
+              const submissions = await apiRequest(
+                `/battles/${battle.battle_id}/submissions`,
+                {},
+                user.token
+              );
+  
+              setBattleSubmissions(prev => ({
+                ...prev,
+                [battle.battle_id]: submissions
+              }));
+            })
+        );
+      } catch (err) {
+        console.error('Automatic battle refresh failed:', err);
+      }
+    };
+  
+    const intervalId = setInterval(refreshBattleData, 5000);
+  
+    return () => clearInterval(intervalId);
+  }, [activeLounge, user]);
+  useEffect(() => {
+    if (!activeLounge || !user) return;
     const wsBaseUrl = API_BASE_URL.replace(/^http/, 'ws');
     const wsUrl = `${wsBaseUrl}/ws/lounges/${activeLounge.id}?token=${encodeURIComponent(user.token)}`;
     const socket = new WebSocket(wsUrl);
